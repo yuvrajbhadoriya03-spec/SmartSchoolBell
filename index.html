@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart School Bell – IoT Control System</title>
+  <meta name="description" content="ESP32-based Smart School Bell IoT Control System Dashboard for automated timetable bell management with RFID authentication." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ═══════════ PARTICLE CANVAS ═══════════ -->
+  <canvas id="particleCanvas"></canvas>
+
+  <!-- ═══════════ HEADER ═══════════ -->
+  <header id="mainHeader">
+    <div class="header-glow"></div>
+    <div class="header-content">
+      <div class="header-left">
+        <div class="logo-mark">
+          <svg viewBox="0 0 40 40" class="bell-icon">
+            <path d="M20 4 C20 4 12 4 12 14 L12 22 L8 26 L8 28 L32 28 L32 26 L28 22 L28 14 C28 4 20 4 20 4Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M16 28 C16 31 18 34 20 34 C22 34 24 31 24 28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="20" cy="14" r="2" fill="currentColor" class="bell-clapper"/>
+          </svg>
+        </div>
+        <div class="header-text">
+          <h1>SMART SCHOOL BELL</h1>
+          <p class="header-subtitle">IoT CONTROL SYSTEM</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="connection-badge" id="connectionBadge">
+          <span class="conn-dot"></span>
+          <span class="conn-text">ESP32 CONNECTED</span>
+        </div>
+        <div class="admin-badge" id="adminBadge">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="11" width="18" height="11" rx="2"/>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+          <span>LOCKED</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ═══════════ MAIN DASHBOARD ═══════════ -->
+  <main id="dashboard">
+
+    <!-- ──── ROW 1: Live Status + Bell Control ──── -->
+    <section class="dashboard-row row-top">
+
+      <!-- LIVE STATUS CARD -->
+      <div class="card card-live-status" id="cardLiveStatus">
+        <div class="card-header">
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+          </div>
+          <h2>LIVE STATUS</h2>
+          <span class="card-badge badge-online" id="systemStatusBadge">ONLINE</span>
+        </div>
+        <div class="card-body">
+          <div class="live-clock-container">
+            <div class="clock-display" id="clockDisplay">09:45:30</div>
+            <div class="clock-period" id="clockPeriod">AM</div>
+          </div>
+          <div class="live-date" id="liveDate">Monday, 20 September 2026</div>
+          <div class="status-grid">
+            <div class="status-item">
+              <span class="status-label">Wi-Fi</span>
+              <span class="status-value status-ok" id="wifiStatus">
+                <span class="status-dot dot-ok"></span>Connected
+              </span>
+            </div>
+            <div class="status-item">
+              <span class="status-label">System</span>
+              <span class="status-value status-ok" id="systemStatus">
+                <span class="status-dot dot-ok"></span>Online
+              </span>
+            </div>
+            <div class="status-item">
+              <span class="status-label">Bell</span>
+              <span class="status-value" id="bellOnOff">
+                <span class="status-dot dot-idle"></span>Idle
+              </span>
+            </div>
+            <div class="status-item">
+              <span class="status-label">RTC Sync</span>
+              <span class="status-value status-ok" id="rtcSync">
+                <span class="status-dot dot-ok"></span>Synced
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- BELL CONTROL CARD -->
+      <div class="card card-bell-control" id="cardBellControl">
+        <div class="card-header">
+          <div class="card-icon icon-bell">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+              <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+            </svg>
+          </div>
+          <h2>BELL CONTROL</h2>
+        </div>
+        <div class="card-body">
+          <div class="bell-buttons">
+            <button class="btn-bell btn-manual btn-locked" id="btnManualBell" onclick="App.triggerManualBell()" title="Scan admin RFID card to unlock manual bell">
+              <div class="btn-lock-indicator" id="manualBellLock">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="11" width="18" height="11" rx="2"/>
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                </svg>
+              </div>
+              <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+              </svg>
+              <span>RFID AUTH REQUIRED</span>
+            </button>
+            <button class="btn-bell btn-emergency" id="btnEmergencyBell" onclick="App.triggerEmergencyBell()">
+              <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+              </svg>
+              <span>EMERGENCY</span>
+            </button>
+          </div>
+          <div class="bell-info-row">
+            <div class="bell-info-item">
+              <span class="bell-info-label">Duration</span>
+              <span class="bell-info-value" id="bellDuration">3s</span>
+            </div>
+            <div class="bell-info-item">
+              <span class="bell-info-label">Countdown</span>
+              <span class="bell-info-value bell-countdown" id="bellCountdown">—</span>
+            </div>
+            <div class="bell-info-item">
+              <span class="bell-info-label">Emergency</span>
+              <span class="bell-info-value" id="emergencyStatus">Inactive</span>
+            </div>
+          </div>
+          <div class="bell-active-banner" id="bellActiveBanner">
+            <div class="bell-ring-animation">
+              <div class="ring-wave"></div>
+              <div class="ring-wave ring-wave-2"></div>
+              <div class="ring-wave ring-wave-3"></div>
+            </div>
+            <span>BELL RINGING</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ──── ROW 2: Today's Timetable ──── -->
+    <section class="dashboard-row">
+      <div class="card card-timetable card-full" id="cardTimetable">
+        <div class="card-header">
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+              <line x1="16" y1="2" x2="16" y2="6"/>
+              <line x1="8" y1="2" x2="8" y2="6"/>
+              <line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
+          </div>
+          <h2>TODAY'S TIMETABLE</h2>
+          <div class="next-bell-chip" id="nextBellChip">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+              <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+            </svg>
+            <span>Next bell in <strong id="nextBellTime">14:32</strong></span>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="timetable-wrapper">
+            <table class="timetable" id="timetableBody">
+              <thead>
+                <tr>
+                  <th>Period</th>
+                  <th>Start</th>
+                  <th>End</th>
+                  <th>Subject / Name</th>
+                  <th>Bell Duration</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="timetableRows">
+                <!-- Populated by JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ──── ROW 3: Timetable Manager ──── -->
+    <section class="dashboard-row">
+      <div class="card card-manager card-full" id="cardManager">
+        <div class="card-header">
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+          </div>
+          <h2>TIMETABLE MANAGER</h2>
+          <span class="card-badge badge-locked" id="managerLockBadge">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="11" rx="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            ADMIN ONLY
+          </span>
+        </div>
+        <div class="card-body">
+          <div class="manager-auth-overlay" id="managerOverlay">
+            <div class="auth-lock-icon">
+              <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="3" y="11" width="18" height="11" rx="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+            </div>
+            <p>Scan RFID card to unlock timetable management</p>
+            <button class="btn-auth-sim" onclick="App.simulateAuth()">Simulate RFID Auth</button>
+          </div>
+          <div class="manager-content" id="managerContent" style="display:none;">
+            <div class="manager-toolbar">
+              <button class="btn-tool btn-add" id="btnAddEntry" onclick="App.openAddModal()">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="12" y1="5" x2="12" y2="19"/>
+                  <line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                Add Entry
+              </button>
+              <button class="btn-tool btn-lock" id="btnLockManager" onclick="App.lockManager()">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="11" width="18" height="11" rx="2"/>
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                </svg>
+                Lock
+              </button>
+            </div>
+            <div class="timetable-wrapper">
+              <table class="timetable timetable-manager" id="managerTable">
+                <thead>
+                  <tr>
+                    <th>Period</th>
+                    <th>Start</th>
+                    <th>End</th>
+                    <th>Name</th>
+                    <th>Bell (s)</th>
+                    <th>Enabled</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="managerRows">
+                  <!-- Populated by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ──── ROW 4: Special Modes + Security ──── -->
+    <section class="dashboard-row">
+
+      <!-- SPECIAL MODES -->
+      <div class="card card-modes" id="cardModes">
+        <div class="card-header">
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </div>
+          <h2>SPECIAL MODES</h2>
+          <span class="card-badge badge-offline" style="margin-left:auto; font-size:0.6rem; opacity:0.85;">NOT YET CONNECTED</span>
+        </div>
+        <div class="card-body">
+          <div class="modes-grid">
+            <div class="mode-item" id="modeHoliday">
+              <div class="mode-info">
+                <span class="mode-icon">🏖️</span>
+                <span class="mode-name">Holiday Mode</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggleHoliday" onchange="App.toggleMode('holiday')" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="mode-item" id="modeExam">
+              <div class="mode-info">
+                <span class="mode-icon">📝</span>
+                <span class="mode-name">Exam Mode</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggleExam" onchange="App.toggleMode('exam')" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="mode-item" id="modeSpecial">
+              <div class="mode-info">
+                <span class="mode-icon">⚡</span>
+                <span class="mode-name">Special Timetable</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggleSpecial" onchange="App.toggleMode('special')" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="mode-item mode-active" id="modeNormal">
+              <div class="mode-info">
+                <span class="mode-icon">🔔</span>
+                <span class="mode-name">Normal Timetable</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggleNormal" checked onchange="App.toggleMode('normal')" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="mode-item mode-active" id="modeAuto">
+              <div class="mode-info">
+                <span class="mode-icon">🤖</span>
+                <span class="mode-name">Automatic Bell</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggleAuto" checked onchange="App.toggleMode('auto')" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SECURITY CARD -->
+      <div class="card card-security" id="cardSecurity">
+        <div class="card-header">
+          <div class="card-icon icon-security">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+          </div>
+          <h2>SECURITY</h2>
+        </div>
+        <div class="card-body">
+          <div class="security-grid">
+            <div class="sec-item" id="secRFID">
+              <div class="sec-icon sec-locked">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="2" y="7" width="20" height="14" rx="2"/>
+                  <path d="M12 11v4"/>
+                  <circle cx="12" cy="17" r="1"/>
+                  <path d="M7 7V5a5 5 0 0 1 10 0v2"/>
+                </svg>
+              </div>
+              <div class="sec-info">
+                <span class="sec-label">RFID Auth</span>
+                <span class="sec-value sec-val-locked" id="secRFIDVal">Not Authenticated</span>
+              </div>
+            </div>
+            <div class="sec-item" id="secAccess">
+              <div class="sec-icon sec-locked">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                </svg>
+              </div>
+              <div class="sec-info">
+                <span class="sec-label">Access Status</span>
+                <span class="sec-value sec-val-locked" id="secAccessVal">Locked</span>
+              </div>
+            </div>
+            <div class="sec-item" id="secTouch">
+              <div class="sec-icon sec-locked">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M18 11V6a6 6 0 0 0-12 0v5"/>
+                  <rect x="4" y="11" width="16" height="11" rx="2"/>
+                </svg>
+              </div>
+              <div class="sec-info">
+                <span class="sec-label">Touch Control</span>
+                <span class="sec-value sec-val-locked" id="secTouchVal">Disabled</span>
+              </div>
+            </div>
+            <div class="sec-item" id="secEmergency">
+              <div class="sec-icon sec-ok">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                </svg>
+              </div>
+              <div class="sec-info">
+                <span class="sec-label">Emergency Button</span>
+                <span class="sec-value sec-val-ok" id="secEmergencyVal">Ready</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ──── ROW 5: System Information ──── -->
+    <section class="dashboard-row">
+      <div class="card card-sysinfo card-full" id="cardSysInfo">
+        <div class="card-header">
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+              <line x1="8" y1="21" x2="16" y2="21"/>
+              <line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+          </div>
+          <h2>SYSTEM INFORMATION</h2>
+        </div>
+        <div class="card-body">
+          <div class="sysinfo-grid">
+            <div class="sysinfo-item">
+              <div class="sysinfo-icon sysinfo-ok">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="2" y="3" width="20" height="14" rx="2"/>
+                  <path d="M8 21h8M12 17v4"/>
+                </svg>
+              </div>
+              <div class="sysinfo-detail">
+                <span class="sysinfo-label">ESP32 Connection</span>
+                <span class="sysinfo-value" id="sysEsp32">Connected via Wi-Fi</span>
+                <span class="sysinfo-sub" id="sysEsp32IP">IP: 10.225.96.148</span>
+              </div>
+              <span class="sysinfo-badge badge-ok">OK</span>
+            </div>
+            <div class="sysinfo-item">
+              <div class="sysinfo-icon sysinfo-ok">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"/>
+                  <polyline points="12 6 12 12 16 14"/>
+                </svg>
+              </div>
+              <div class="sysinfo-detail">
+                <span class="sysinfo-label">RTC Module</span>
+                <span class="sysinfo-value" id="sysRTC">PCF8563 – Synchronized</span>
+                <span class="sysinfo-sub" id="sysRTCDrift">I2C 0x51 (GPIO 21/22)</span>
+              </div>
+              <span class="sysinfo-badge badge-ok">OK</span>
+            </div>
+            <div class="sysinfo-item">
+              <div class="sysinfo-icon sysinfo-ok">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="2" y="7" width="20" height="14" rx="2"/>
+                  <path d="M12 11v4"/>
+                  <circle cx="12" cy="17" r="1"/>
+                </svg>
+              </div>
+              <div class="sysinfo-detail">
+                <span class="sysinfo-label">RFID Reader</span>
+                <span class="sysinfo-value" id="sysRFID">RC522 – Active</span>
+                <span class="sysinfo-sub" id="sysRFIDFreq">13.56 MHz</span>
+              </div>
+              <span class="sysinfo-badge badge-ok">OK</span>
+            </div>
+            <div class="sysinfo-item">
+              <div class="sysinfo-icon sysinfo-ok">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M18 11V6a6 6 0 0 0-12 0v5"/>
+                  <rect x="4" y="11" width="16" height="11" rx="2"/>
+                </svg>
+              </div>
+              <div class="sysinfo-detail">
+                <span class="sysinfo-label">Touch Sensor</span>
+                <span class="sysinfo-value" id="sysTouch">TTP223 – Standby</span>
+                <span class="sysinfo-sub">Capacitive Touch</span>
+              </div>
+              <span class="sysinfo-badge badge-ok">OK</span>
+            </div>
+            <div class="sysinfo-item">
+              <div class="sysinfo-icon sysinfo-ok">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                </svg>
+              </div>
+              <div class="sysinfo-detail">
+                <span class="sysinfo-label">Emergency Button</span>
+                <span class="sysinfo-value" id="sysEmergency">Physical – Ready</span>
+                <span class="sysinfo-sub">No RFID Required</span>
+              </div>
+              <span class="sysinfo-badge badge-ok">OK</span>
+            </div>
+            <div class="sysinfo-item">
+              <div class="sysinfo-icon sysinfo-ok">
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                </svg>
+              </div>
+              <div class="sysinfo-detail">
+                <span class="sysinfo-label">Bell Output</span>
+                <span class="sysinfo-value" id="sysBell">Relay Module – Ready</span>
+                <span class="sysinfo-sub">GPIO25 Active Low</span>
+              </div>
+              <span class="sysinfo-badge badge-ok">OK</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ═══════════ ADD/EDIT MODAL ═══════════ -->
+  <div class="modal-overlay" id="modalOverlay" onclick="App.closeModal()">
+    <div class="modal-card" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <h3 id="modalTitle">Add Timetable Entry</h3>
+        <button class="modal-close" onclick="App.closeModal()">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <form class="modal-form" id="entryForm" onsubmit="App.saveEntry(event)">
+        <div class="form-group">
+          <label for="formPeriod">Period Number</label>
+          <input type="number" id="formPeriod" min="1" max="20" required />
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="formStart">Start Time</label>
+            <input type="time" id="formStart" required />
+          </div>
+          <div class="form-group">
+            <label for="formEnd">End Time</label>
+            <input type="time" id="formEnd" required />
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="formName">Period Name / Subject</label>
+          <input type="text" id="formName" placeholder="e.g. Mathematics" required />
+        </div>
+        <div class="form-group">
+          <label for="formDuration">Bell Duration (seconds)</label>
+          <input type="number" id="formDuration" min="1" max="30" value="3" required />
+        </div>
+        <div class="form-group form-check-group">
+          <label class="toggle-switch toggle-sm">
+            <input type="checkbox" id="formEnabled" checked />
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="form-check-label">Entry Enabled</span>
+        </div>
+        <input type="hidden" id="formEditId" value="" />
+        <div class="form-actions">
+          <button type="button" class="btn-cancel" onclick="App.closeModal()">Cancel</button>
+          <button type="submit" class="btn-save" id="btnSaveEntry">Save Entry</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ═══════════ FOOTER ═══════════ -->
+  <footer id="mainFooter">
+    <div class="footer-content">
+      <span class="footer-brand">SMART SCHOOL BELL — IoT Control System</span>
+      <span class="footer-info">ESP32 • PCF8563 RTC • RC522 RFID • TTP223 Touch • Final Year Project</span>
+    </div>
+  </footer>
+
+  <script src="api.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

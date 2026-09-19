@@ -1,0 +1,17 @@
+# Security & Secrets
+secrets.h
+*.env
+*.env.*
+*.key
+*.pem
+
+# Dependencies
+node_modules/
+package-lock.json
+
+# IDE & OS Artifacts
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/

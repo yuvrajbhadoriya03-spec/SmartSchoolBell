@@ -1,0 +1,22 @@
+{
+  "name": "smart-school-bell",
+  "version": "1.0.0",
+  "description": "Smart School Bell - Advanced IoT Control Dashboard",
+  "main": "index.html",
+  "scripts": {
+    "start": "serve -l 3000",
+    "dev": "serve -l 3000"
+  },
+  "keywords": [
+    "esp32",
+    "iot",
+    "smart-school-bell",
+    "antigravity",
+    "arduino"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "serve": "^14.2.4"
+  }
+}
