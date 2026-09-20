@@ -22,13 +22,22 @@ const API = (() => {
   // HELPER FUNCTIONS
   // ═══════════════════════════════════════════════════════
 
+  const REQUEST_TIMEOUT_MS = 3000;
+
   async function request(endpoint, options = {}) {
     const url = `${BASE_URL}${endpoint}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+      () => controller.abort(),
+      REQUEST_TIMEOUT_MS
+    );
 
     try {
       const response = await fetch(url, {
         cache: 'no-store',
         ...options,
+        signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
           ...(options.headers || {})
@@ -60,6 +69,8 @@ const API = (() => {
       console.error(`ESP32 API error: ${endpoint}`, error);
 
       throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 

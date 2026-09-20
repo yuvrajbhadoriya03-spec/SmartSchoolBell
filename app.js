@@ -178,7 +178,13 @@ const App = (() => {
   }
 
   // ═══════════ SYSTEM STATUS ═══════════
+  let _statusPollRunning = false;
+
   async function updateSystemStatus() {
+    // Guard against concurrent polls stacking up when ESP32 is unreachable
+    if (_statusPollRunning) return;
+    _statusPollRunning = true;
+
     try {
       const status = await API.getStatus();
       const auth = await API.getAuthStatus();
@@ -293,6 +299,52 @@ const App = (() => {
         'Status update failed:',
         e
       );
+
+      // ─── Mark everything OFFLINE when API unreachable ───
+      const wifiEl = $('#wifiStatus');
+      if (wifiEl) {
+        wifiEl.innerHTML =
+          '<span class="status-dot dot-error"></span>Disconnected';
+      }
+
+      const sysEl = $('#systemStatus');
+      if (sysEl) {
+        sysEl.innerHTML =
+          '<span class="status-dot dot-error"></span>Offline';
+      }
+
+      const badge = $('#systemStatusBadge');
+      if (badge) {
+        badge.textContent = 'OFFLINE';
+        badge.className = 'card-badge badge-offline';
+      }
+
+      const connBadge = $('#connectionBadge');
+      if (connBadge) {
+        const connText = connBadge.querySelector('.conn-text');
+        connBadge.style.borderColor = 'rgba(239,68,68,0.25)';
+        connBadge.style.background = 'rgba(239,68,68,0.1)';
+        connBadge.style.color = 'var(--red)';
+        if (connText) connText.textContent = 'ESP32 OFFLINE';
+      }
+
+      const bellEl = $('#bellOnOff');
+      if (bellEl) {
+        bellEl.innerHTML =
+          '<span class="status-dot dot-error"></span>Unreachable';
+      }
+
+      const sysEsp32 = $('#sysEsp32');
+      if (sysEsp32) {
+        sysEsp32.textContent = 'Disconnected';
+      }
+
+      const sysRTC = $('#sysRTC');
+      if (sysRTC) {
+        sysRTC.textContent = 'PCF8563 – Offline/Unsynced';
+      }
+    } finally {
+      _statusPollRunning = false;
     }
   }
 

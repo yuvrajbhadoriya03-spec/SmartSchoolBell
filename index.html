@@ -35,7 +35,7 @@
       <div class="header-right">
         <div class="connection-badge" id="connectionBadge">
           <span class="conn-dot"></span>
-          <span class="conn-text">ESP32 CONNECTED</span>
+          <span class="conn-text">CHECKING…</span>
         </div>
         <div class="admin-badge" id="adminBadge">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
@@ -64,7 +64,7 @@
             </svg>
           </div>
           <h2>LIVE STATUS</h2>
-          <span class="card-badge badge-online" id="systemStatusBadge">ONLINE</span>
+          <span class="card-badge badge-offline" id="systemStatusBadge">CHECKING…</span>
         </div>
         <div class="card-body">
           <div class="live-clock-container">
@@ -75,14 +75,14 @@
           <div class="status-grid">
             <div class="status-item">
               <span class="status-label">Wi-Fi</span>
-              <span class="status-value status-ok" id="wifiStatus">
-                <span class="status-dot dot-ok"></span>Connected
+              <span class="status-value" id="wifiStatus">
+                <span class="status-dot dot-idle"></span>Checking…
               </span>
             </div>
             <div class="status-item">
               <span class="status-label">System</span>
-              <span class="status-value status-ok" id="systemStatus">
-                <span class="status-dot dot-ok"></span>Online
+              <span class="status-value" id="systemStatus">
+                <span class="status-dot dot-idle"></span>Checking…
               </span>
             </div>
             <div class="status-item">
@@ -93,8 +93,8 @@
             </div>
             <div class="status-item">
               <span class="status-label">RTC Sync</span>
-              <span class="status-value status-ok" id="rtcSync">
-                <span class="status-dot dot-ok"></span>Synced
+              <span class="status-value" id="rtcSync">
+                <span class="status-dot dot-idle"></span>Checking…
               </span>
             </div>
           </div>
@@ -433,7 +433,7 @@
               </div>
               <div class="sysinfo-detail">
                 <span class="sysinfo-label">ESP32 Connection</span>
-                <span class="sysinfo-value" id="sysEsp32">Connected via Wi-Fi</span>
+                <span class="sysinfo-value" id="sysEsp32">Checking…</span>
                 <span class="sysinfo-sub" id="sysEsp32IP">IP: 10.225.96.148</span>
               </div>
               <span class="sysinfo-badge badge-ok">OK</span>
@@ -447,7 +447,7 @@
               </div>
               <div class="sysinfo-detail">
                 <span class="sysinfo-label">RTC Module</span>
-                <span class="sysinfo-value" id="sysRTC">PCF8563 – Synchronized</span>
+                <span class="sysinfo-value" id="sysRTC">Checking…</span>
                 <span class="sysinfo-sub" id="sysRTCDrift">I2C 0x51 (GPIO 21/22)</span>
               </div>
               <span class="sysinfo-badge badge-ok">OK</span>
