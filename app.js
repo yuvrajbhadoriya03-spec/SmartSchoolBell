@@ -20,7 +20,7 @@ const App = (() => {
     initParticles();
     startClock();
     loadTimetable();
-    loadManagerTable();
+    loadManagerTimetable();
     startNextBellCountdown();
     updateManualBellUI();
 
@@ -343,8 +343,64 @@ const App = (() => {
       if (sysRTC) {
         sysRTC.textContent = 'PCF8563 – Offline/Unsynced';
       }
+
+      // If disconnected/offline, ensure manager is locked
+      if (isAuthenticated) {
+        isAuthenticated = false;
+        syncManagerLockUI(false);
+        closeModal();
+      }
     } finally {
       _statusPollRunning = false;
+    }
+  }
+
+  // ═══════════ TIMETABLE MANAGER HELPERS ═══════════
+  function handleManagerApiError(res, fallbackMsg) {
+    if (res && (res.status === 403 || res.error === 'RFID_AUTH_REQUIRED' || (res.message && res.message.includes('RFID')))) {
+      alert('RFID authorization required');
+      lockManager();
+      return true;
+    }
+    if (!res || res.error === 'ESP32_OFFLINE' || res.status === 0) {
+      alert('ESP32 offline / unreachable');
+      return true;
+    }
+    alert(res.message || res.error || fallbackMsg || 'Operation failed');
+    return true;
+  }
+
+  function syncManagerLockUI(unlocked) {
+    const overlay = $('#managerOverlay');
+    const content = $('#managerContent');
+    const badge = $('#managerLockBadge');
+
+    if (unlocked) {
+      if (overlay) overlay.style.display = 'none';
+      if (content) content.style.display = 'block';
+      if (badge) {
+        badge.className = 'card-badge badge-online';
+        badge.innerHTML = `
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="11" width="18" height="11" rx="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+          UNLOCKED
+        `;
+      }
+    } else {
+      if (overlay) overlay.style.display = '';
+      if (content) content.style.display = 'none';
+      if (badge) {
+        badge.className = 'card-badge badge-locked';
+        badge.innerHTML = `
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="11" width="18" height="11" rx="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+          ADMIN ONLY
+        `;
+      }
     }
   }
 
@@ -485,6 +541,18 @@ const App = (() => {
         if (span) {
           span.textContent = 'LOCKED';
         }
+      }
+    }
+
+    // ─── Timetable Manager Auth Sync ───
+    const isAuthed = Boolean(auth.rfidAuthenticated);
+    if (isAuthed !== isAuthenticated) {
+      isAuthenticated = isAuthed;
+      syncManagerLockUI(isAuthed);
+      if (isAuthed) {
+        loadManagerTimetable();
+      } else {
+        closeModal();
       }
     }
   }
@@ -899,302 +967,173 @@ const App = (() => {
   }
 
   // ═══════════ NEXT BELL COUNTDOWN ═══════════
-  function startNextBellCountdown() {
+  async function updateNextBellCountdown() {
+    try {
+      const entries = await API.getTimetable();
+      const now = new Date();
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      const currentSeconds = now.getSeconds();
+      const totalSecondsNow = currentMinutes * 60 + currentSeconds;
 
-    async function update() {
+      let nextBellSeconds = null;
 
-      try {
-
-        const entries =
-          await API.getTimetable();
-
-        const now = new Date();
-
-        const currentMinutes =
-          now.getHours() * 60 +
-          now.getMinutes();
-
-        const currentSeconds =
-          now.getSeconds();
-
-        const totalSecondsNow =
-          currentMinutes * 60 +
-          currentSeconds;
-
-        let nextBellSeconds = null;
-
-        for (const entry of entries) {
-
-          if (!entry.enabled) continue;
-
-          const [sh, sm] =
-            entry.start.split(':').map(Number);
-
-          const entryTotalSeconds =
-            (sh * 60 + sm) * 60;
-
-          if (
-            entryTotalSeconds >
-            totalSecondsNow
-          ) {
-
-            nextBellSeconds =
-              entryTotalSeconds -
-              totalSecondsNow;
-
-            break;
-          }
+      for (const entry of entries) {
+        if (!entry.enabled) continue;
+        const [sh, sm] = entry.start.split(':').map(Number);
+        const entryTotalSeconds = (sh * 60 + sm) * 60;
+        if (entryTotalSeconds > totalSecondsNow) {
+          nextBellSeconds = entryTotalSeconds - totalSecondsNow;
+          break;
         }
-
-        const chip =
-          $('#nextBellChip');
-
-        const timeEl =
-          $('#nextBellTime');
-
-        if (!chip || !timeEl) return;
-
-        if (nextBellSeconds !== null) {
-
-          const mins =
-            Math.floor(
-              nextBellSeconds / 60
-            );
-
-          const secs =
-            nextBellSeconds % 60;
-
-          const hrs =
-            Math.floor(mins / 60);
-
-          const remainMins =
-            mins % 60;
-
-          if (hrs > 0) {
-
-            timeEl.textContent =
-              `${hrs}h ${String(remainMins).padStart(2, '0')}m`;
-
-          } else {
-
-            timeEl.textContent =
-              `${remainMins}:${String(secs).padStart(2, '0')}`;
-          }
-
-          chip.style.display = 'flex';
-
-        } else {
-
-          chip.style.display = 'none';
-        }
-
-      } catch (e) {
-
-        console.error(
-          'Next bell update failed:',
-          e
-        );
       }
+
+      const chip = $('#nextBellChip');
+      const timeEl = $('#nextBellTime');
+      if (!chip || !timeEl) return;
+
+      if (nextBellSeconds !== null) {
+        const mins = Math.floor(nextBellSeconds / 60);
+        const secs = nextBellSeconds % 60;
+        const hrs = Math.floor(mins / 60);
+        const remainMins = mins % 60;
+
+        if (hrs > 0) {
+          timeEl.textContent = `${hrs}h ${String(remainMins).padStart(2, '0')}m`;
+        } else {
+          timeEl.textContent = `${remainMins}:${String(secs).padStart(2, '0')}`;
+        }
+        chip.style.display = 'flex';
+      } else {
+        chip.style.display = 'none';
+      }
+    } catch (e) {
+      console.error('Next bell update failed:', e);
     }
+  }
 
-    update();
-
-    setInterval(
-      update,
-      1000
-    );
-
-    setInterval(
-      loadTimetable,
-      30000
-    );
+  function startNextBellCountdown() {
+    updateNextBellCountdown();
+    setInterval(updateNextBellCountdown, 1000);
+    setInterval(loadTimetable, 30000);
   }
 
   // ═══════════ TIMETABLE MANAGER ═══════════
-  async function loadManagerTable() {
-
+  async function loadManagerTimetable() {
     try {
-
-      const entries =
-        await API.getTimetable();
-
-      const tbody =
-        $('#managerRows');
-
-      if (!tbody) return;
-
-      tbody.innerHTML = '';
-
-      entries.forEach(entry => {
-
-        const tr =
-          document.createElement('tr');
-
-        tr.innerHTML = `
-          <td>${entry.period}</td>
-          <td>${formatTime12(entry.start)}</td>
-          <td>${formatTime12(entry.end)}</td>
-          <td>${entry.name}</td>
-          <td>${entry.duration}</td>
-
-          <td>
-            <label class="toggle-switch toggle-sm">
-              <input
-                type="checkbox"
-                ${entry.enabled ? 'checked' : ''}
-                onchange="App.toggleEntry(${entry.id})"
-              />
-              <span class="toggle-slider"></span>
-            </label>
-          </td>
-
-          <td>
-            <button
-              class="action-btn"
-              onclick="App.editEntry(${entry.id})"
-              title="Edit"
-            >✎</button>
-
-            <button
-              class="action-btn action-btn-delete"
-              onclick="App.deleteEntry(${entry.id})"
-              title="Delete"
-            >✕</button>
-          </td>
-        `;
-
-        tbody.appendChild(tr);
-      });
-
+      const entries = await API.getTimetable();
+      renderManagerTimetable(entries);
     } catch (e) {
-
-      console.error(
-        'Failed to load manager table:',
-        e
-      );
+      console.error('Failed to load manager timetable:', e);
     }
+  }
+
+  // Alias for backward compatibility
+  const loadManagerTable = loadManagerTimetable;
+
+  function renderManagerTimetable(entries) {
+    const tbody = $('#managerRows');
+    if (!tbody) return;
+
+    tbody.innerHTML = '';
+
+    if (!Array.isArray(entries) || entries.length === 0) {
+      const emptyTr = document.createElement('tr');
+      emptyTr.innerHTML = `
+        <td colspan="7" style="text-align: center; color: var(--text-dim); padding: 18px;">
+          No timetable entries found.
+        </td>
+      `;
+      tbody.appendChild(emptyTr);
+      return;
+    }
+
+    entries.forEach(entry => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${entry.period}</td>
+        <td>${formatTime12(entry.start)}</td>
+        <td>${formatTime12(entry.end)}</td>
+        <td>${entry.name}</td>
+        <td>${entry.duration}</td>
+
+        <td>
+          <label class="toggle-switch toggle-sm">
+            <input
+              type="checkbox"
+              ${entry.enabled ? 'checked' : ''}
+              onchange="App.toggleEntry(${entry.id})"
+            />
+            <span class="toggle-slider"></span>
+          </label>
+        </td>
+
+        <td>
+          <button
+            class="action-btn"
+            onclick="App.openEditModal(${entry.id})"
+            title="Edit"
+          >✎</button>
+
+          <button
+            class="action-btn action-btn-delete"
+            onclick="App.deleteEntry(${entry.id})"
+            title="Delete"
+          >✕</button>
+        </td>
+      `;
+
+      tbody.appendChild(tr);
+    });
   }
 
   // ═══════════ AUTHENTICATION ═══════════
   async function simulateAuth() {
-
     try {
+      const result = await API.authenticateRFID('17:F1:74:06');
 
-      const result =
-        await API.authenticateRFID();
-
-      if (result.success) {
-
+      if (result && result.success) {
         isAuthenticated = true;
-
-        $('#managerOverlay').style.display =
-          'none';
-
-        $('#managerContent').style.display =
-          'block';
-
-        $('#managerLockBadge').innerHTML = `
-          <svg
-            viewBox="0 0 24 24"
-            width="12"
-            height="12"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <rect
-              x="3"
-              y="11"
-              width="18"
-              height="11"
-              rx="2"
-            />
-            <path
-              d="M7 11V7a5 5 0 0 1 10 0v4"
-            />
-          </svg>
-          UNLOCKED
-        `;
-
-        $('#managerLockBadge').className =
-          'card-badge badge-online';
-
-        updateManualBellUI();
-        updateSystemStatus();
+        syncManagerLockUI(true);
+        await loadManagerTimetable();
+        await updateManualBellUI();
+        await updateSystemStatus();
+      } else {
+        handleManagerApiError(result, 'RFID authorization required');
       }
 
     } catch (e) {
-
-      console.error(
-        'Auth failed:',
-        e
-      );
+      console.error('Simulate auth error:', e);
+      alert('ESP32 offline / unreachable');
     }
   }
 
   // ═══════════ LOCK MANAGER ═══════════
   async function lockManager() {
-
     try {
-
       await API.lockAuth();
-
-      isAuthenticated = false;
-
-      $('#managerOverlay').style.display =
-        '';
-
-      $('#managerContent').style.display =
-        'none';
-
-      $('#managerLockBadge').innerHTML = `
-        <svg
-          viewBox="0 0 24 24"
-          width="12"
-          height="12"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <rect
-            x="3"
-            y="11"
-            width="18"
-            height="11"
-            rx="2"
-          />
-          <path
-            d="M7 11V7a5 5 0 0 1 10 0v4"
-          />
-        </svg>
-        ADMIN ONLY
-      `;
-
-      $('#managerLockBadge').className =
-        'card-badge badge-locked';
-
-      updateManualBellUI();
-      updateSystemStatus();
-
     } catch (e) {
-
-      console.error(
-        'Lock failed:',
-        e
-      );
+      console.error('Lock failed:', e);
+    } finally {
+      isAuthenticated = false;
+      syncManagerLockUI(false);
+      closeModal();
+      await updateManualBellUI();
+      await updateSystemStatus();
     }
   }
 
   // ═══════════ MODAL ═══════════
   function openAddModal() {
-
     editingEntryId = null;
 
-    $('#modalTitle').textContent =
-      'Add Timetable Entry';
+    const editIdEl = $('#formEditId');
+    if (editIdEl) editIdEl.value = '';
 
-    $('#btnSaveEntry').textContent =
-      'Add Entry';
+    const titleEl = $('#modalTitle');
+    if (titleEl) titleEl.textContent = 'Add Timetable Entry';
+
+    const btnSave = $('#btnSaveEntry');
+    if (btnSave) btnSave.textContent = 'Add Entry';
 
     $('#formPeriod').value = '';
     $('#formStart').value = '';
@@ -1202,68 +1141,64 @@ const App = (() => {
     $('#formName').value = '';
     $('#formDuration').value = 3;
     $('#formEnabled').checked = true;
-    $('#formEditId').value = '';
 
-    $('#modalOverlay').classList.add(
-      'open'
-    );
+    const overlay = $('#modalOverlay');
+    if (overlay) overlay.classList.add('open');
   }
 
-  async function editEntry(id) {
+  async function openEditModal(id) {
+    try {
+      const entries = await API.getTimetable();
+      const entry = entries.find(e => String(e.id) === String(id));
 
-    const entries =
-      await API.getTimetable();
+      if (!entry) {
+        alert('Timetable entry not found');
+        return;
+      }
 
-    const entry =
-      entries.find(e => e.id === id);
+      editingEntryId = entry.id;
 
-    if (!entry) return;
+      const editIdEl = $('#formEditId');
+      if (editIdEl) editIdEl.value = entry.id;
 
-    editingEntryId = id;
+      const titleEl = $('#modalTitle');
+      if (titleEl) titleEl.textContent = 'Edit Timetable Entry';
 
-    $('#modalTitle').textContent =
-      'Edit Timetable Entry';
+      const btnSave = $('#btnSaveEntry');
+      if (btnSave) btnSave.textContent = 'Save Changes';
 
-    $('#btnSaveEntry').textContent =
-      'Save Changes';
+      $('#formPeriod').value = entry.period;
+      $('#formStart').value = entry.start;
+      $('#formEnd').value = entry.end;
+      $('#formName').value = entry.name;
+      $('#formDuration').value = entry.duration;
+      $('#formEnabled').checked = Boolean(entry.enabled);
 
-    $('#formPeriod').value =
-      entry.period;
-
-    $('#formStart').value =
-      entry.start;
-
-    $('#formEnd').value =
-      entry.end;
-
-    $('#formName').value =
-      entry.name;
-
-    $('#formDuration').value =
-      entry.duration;
-
-    $('#formEnabled').checked =
-      entry.enabled;
-
-    $('#formEditId').value =
-      id;
-
-    $('#modalOverlay').classList.add(
-      'open'
-    );
+      const overlay = $('#modalOverlay');
+      if (overlay) overlay.classList.add('open');
+    } catch (e) {
+      console.error('Failed to open edit modal:', e);
+      alert('ESP32 offline / unreachable');
+    }
   }
+
+  // Alias for backward compatibility
+  const editEntry = openEditModal;
 
   function closeModal() {
-    $('#modalOverlay').classList.remove(
-      'open'
-    );
+    const overlay = $('#modalOverlay');
+    if (overlay) overlay.classList.remove('open');
 
     editingEntryId = null;
+    const editIdEl = $('#formEditId');
+    if (editIdEl) editIdEl.value = '';
   }
 
   // ═══════════ SAVE ENTRY ═══════════
   async function saveEntry(event) {
-    event.preventDefault();
+    if (event) event.preventDefault();
+
+    const editId = $('#formEditId')?.value || editingEntryId;
 
     const data = {
       period: parseInt($('#formPeriod').value, 10) || 1,
@@ -1271,14 +1206,14 @@ const App = (() => {
       end: $('#formEnd').value,
       name: $('#formName').value.trim(),
       duration: parseInt($('#formDuration').value, 10) || 3,
-      enabled: $('#formEnabled').checked,
+      enabled: Boolean($('#formEnabled').checked),
     };
 
     try {
       let res;
-      if (editingEntryId) {
+      if (editId) {
         res = await API.updateEntry(
-          editingEntryId,
+          editId,
           data
         );
       } else {
@@ -1286,24 +1221,25 @@ const App = (() => {
       }
 
       if (res && res.success === false) {
-        if (res.status === 403 || res.error === 'RFID_AUTH_REQUIRED') {
-          alert(`[RFID_AUTH_REQUIRED] HTTP 403 Forbidden: ${res.message || 'Valid admin RFID required for changes'}`);
-        } else {
-          alert(`Save failed: ${res.message || res.error || 'Valid admin RFID authentication required.'}`);
-        }
+        handleManagerApiError(res, 'Save failed');
         return;
       }
 
       closeModal();
-      await loadManagerTable();
-      await loadTimetable();
+      await Promise.all([
+        loadManagerTimetable(),
+        loadTimetable(),
+        updateNextBellCountdown()
+      ]);
+
+      alert(editId ? 'Timetable entry updated successfully' : 'Timetable entry added successfully');
 
     } catch (e) {
       console.error(
         'Save failed:',
         e
       );
-      alert('Save failed: Unable to connect to ESP32.');
+      alert('ESP32 offline / unreachable');
     }
   }
 
@@ -1320,23 +1256,24 @@ const App = (() => {
     try {
       const res = await API.deleteEntry(id);
       if (res && res.success === false) {
-        if (res.status === 403 || res.error === 'RFID_AUTH_REQUIRED') {
-          alert(`[RFID_AUTH_REQUIRED] HTTP 403 Forbidden: ${res.message || 'Valid admin RFID required for changes'}`);
-        } else {
-          alert(`Delete failed: ${res.message || res.error || 'Valid admin RFID authentication required.'}`);
-        }
+        handleManagerApiError(res, 'Delete failed');
         return;
       }
 
-      await loadManagerTable();
-      await loadTimetable();
+      await Promise.all([
+        loadManagerTimetable(),
+        loadTimetable(),
+        updateNextBellCountdown()
+      ]);
+
+      alert('Timetable entry deleted successfully');
 
     } catch (e) {
       console.error(
         'Delete failed:',
         e
       );
-      alert('Delete failed: Unable to connect to ESP32.');
+      alert('ESP32 offline / unreachable');
     }
   }
 
@@ -1345,25 +1282,24 @@ const App = (() => {
     try {
       const res = await API.toggleEntry(id);
       if (res && res.success === false) {
-        if (res.status === 403 || res.error === 'RFID_AUTH_REQUIRED') {
-          alert(`[RFID_AUTH_REQUIRED] HTTP 403 Forbidden: ${res.message || 'Valid admin RFID required for changes'}`);
-        } else {
-          alert(`Toggle failed: ${res.message || res.error || 'Valid admin RFID authentication required.'}`);
-        }
-        await loadManagerTable();
+        handleManagerApiError(res, 'Toggle failed');
+        await loadManagerTimetable();
         return;
       }
 
-      await loadManagerTable();
-      await loadTimetable();
+      await Promise.all([
+        loadManagerTimetable(),
+        loadTimetable(),
+        updateNextBellCountdown()
+      ]);
 
     } catch (e) {
       console.error(
         'Toggle failed:',
         e
       );
-      alert('Toggle failed: Unable to connect to ESP32.');
-      await loadManagerTable();
+      alert('ESP32 offline / unreachable');
+      await loadManagerTimetable();
     }
   }
 
@@ -1461,7 +1397,19 @@ const App = (() => {
 
     lockManager,
 
+    loadManagerTimetable,
+
+    loadManagerTable,
+
+    renderManagerTimetable,
+
+    loadTimetable,
+
+    updateNextBellCountdown,
+
     openAddModal,
+
+    openEditModal,
 
     editEntry,
 
