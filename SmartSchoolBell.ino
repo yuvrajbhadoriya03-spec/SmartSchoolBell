@@ -14,8 +14,8 @@
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
-const char *WIFI_SSID = "CJP";
-const char *WIFI_PASSWORD = "9425047286";
+const char *WIFI_SSID = ".....";
+const char *WIFI_PASSWORD = "......";
 #endif
 
 // =====================================================
