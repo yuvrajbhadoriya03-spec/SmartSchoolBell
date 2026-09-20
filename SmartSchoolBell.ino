@@ -7,36 +7,45 @@
 #include <sys/time.h>
 #include <time.h>
 
-
 // =====================================================
-// WIFI CREDENTIALS (Loaded from secrets.h, excluded from Git)
+// WIFI CREDENTIALS
+// Loaded from secrets.h
 // =====================================================
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
-const char *WIFI_SSID = "YOUR_WIFI_SSID";
-const char *WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char *WIFI_SSID = "CJP";
+const char *WIFI_PASSWORD = "9425047286";
 #endif
 
-// India timezone
+// =====================================================
+// TIMEZONE - INDIA
+// =====================================================
 const long GMT_OFFSET_SEC = 19800;
 const int DAYLIGHT_OFFSET_SEC = 0;
 
 // =====================================================
 // PINS
 // =====================================================
+
+// PCF8563
 #define I2C_SDA 21
 #define I2C_SCL 22
 
+// RC522
 #define RFID_SS 5
 #define RFID_RST 4
 #define RFID_SCK 18
 #define RFID_MOSI 23
 #define RFID_MISO 19
 
+// TTP223
 #define TTP223_PIN 27
+
+// Emergency button
 #define EMERGENCY_PIN 33
 
+// Bell / LEDs
 #define BUZZER_PIN 32
 #define GREEN_LED 14
 #define RED_LED 12
@@ -47,6 +56,8 @@ const int DAYLIGHT_OFFSET_SEC = 0;
 #define PCF8563_ADDR 0x51
 
 bool rtcAvailable = false;
+bool rtcSynced = false;
+bool ntpSyncDone = false;
 
 // =====================================================
 // RFID
@@ -68,7 +79,7 @@ bool bellActive = false;
 bool bellIsEmergency = false;
 
 unsigned long bellStartTime = 0;
-unsigned long bellDuration = 3000; // 3 seconds
+unsigned long bellDuration = 3000;
 
 // =====================================================
 // AUTH
@@ -84,8 +95,7 @@ bool lastTouchState = false;
 bool lastEmergencyState = HIGH;
 
 // =====================================================
-// DASHBOARD TIMETABLE
-// Dashboard fields: id, period, start, end, name, duration, enabled
+// TIMETABLE
 // =====================================================
 #define MAX_TIMETABLE_ENTRIES 30
 
@@ -100,8 +110,10 @@ struct TimetableEntry {
 };
 
 TimetableEntry timetable[MAX_TIMETABLE_ENTRIES];
+
 int timetableCount = 0;
 int nextTimetableId = 1;
+
 String lastAutoBellKey = "";
 
 // =====================================================
@@ -110,19 +122,43 @@ String lastAutoBellKey = "";
 unsigned long lastWiFiCheck = 0;
 unsigned long lastNTPSync = 0;
 
-bool ntpSyncDone = false;
-
 // =====================================================
 // FORWARD DECLARATIONS
 // =====================================================
 void stopBell();
 void lockAuthentication();
+
 void loadTimetable();
 void saveTimetable();
+
 void checkAutomaticBell();
+
 void handleTimetableGet();
 void handleTimetablePost();
 void handleTimetableDynamic();
+
+void handleStatus();
+void handleAuthStatus();
+
+void handleRFIDAuth();
+void handleAuthLock();
+
+void handleManualBell();
+void handleEmergencyBell();
+
+void handleBellAlias();
+void handleEmergencyAlias();
+void handleLockAlias();
+
+void handleOptions();
+void handleNotFound();
+
+void checkRFID();
+void checkTouch();
+void checkEmergency();
+
+void checkWiFi();
+void updateClock();
 
 // =====================================================
 // BCD HELPERS
@@ -132,9 +168,22 @@ uint8_t bcdToDec(uint8_t value) { return ((value >> 4) * 10) + (value & 0x0F); }
 uint8_t decToBcd(uint8_t value) { return ((value / 10) << 4) | (value % 10); }
 
 // =====================================================
+// PCF8563 PROBE
+// =====================================================
+bool isPCF8563Present() {
+
+  Wire.beginTransmission(PCF8563_ADDR);
+
+  uint8_t err = Wire.endTransmission();
+
+  return err == 0;
+}
+
+// =====================================================
 // PCF8563 READ
 //
 // Registers:
+//
 // 0x02 Seconds
 // 0x03 Minutes
 // 0x04 Hours
@@ -147,13 +196,25 @@ bool readPCF8563(uint8_t &second, uint8_t &minute, uint8_t &hour, uint8_t &day,
                  uint8_t &month, uint16_t &year) {
 
   Wire.beginTransmission(PCF8563_ADDR);
+
   Wire.write(0x02);
 
-  if (Wire.endTransmission(false) != 0) {
+  // Repeated START
+  uint8_t txErr = Wire.endTransmission(false);
+
+  if (txErr != 0) {
+
+    Serial.printf("PCF8563 read address error: %d\n", txErr);
+
     return false;
   }
 
-  if (Wire.requestFrom(PCF8563_ADDR, (uint8_t)7) != 7) {
+  uint8_t bytesRead = Wire.requestFrom((uint8_t)PCF8563_ADDR, (uint8_t)7);
+
+  if (bytesRead != 7) {
+
+    Serial.printf("PCF8563 read failed: received %d/7 bytes\n", bytesRead);
+
     return false;
   }
 
@@ -162,13 +223,17 @@ bool readPCF8563(uint8_t &second, uint8_t &minute, uint8_t &hour, uint8_t &day,
   uint8_t hourReg = Wire.read();
   uint8_t dayReg = Wire.read();
 
-  Wire.read(); // weekday
+  // Weekday
+  Wire.read();
 
   uint8_t monthReg = Wire.read();
   uint8_t yearReg = Wire.read();
 
-  // Voltage-low / oscillator-stop flag
+  // Voltage Low / oscillator stop flag
   if (secReg & 0x80) {
+
+    Serial.printf("PCF8563 VL flag set: 0x%02X\n", secReg);
+
     return false;
   }
 
@@ -178,17 +243,17 @@ bool readPCF8563(uint8_t &second, uint8_t &minute, uint8_t &hour, uint8_t &day,
   day = bcdToDec(dayReg & 0x3F);
   month = bcdToDec(monthReg & 0x1F);
 
-  // Century bit:
-  // 0 = 2000s
-  // 1 = 1900s
+  // Century bit
   if (monthReg & 0x80) {
-    year = 1900 + yearReg;
+    year = 1900 + bcdToDec(yearReg);
   } else {
-    year = 2000 + yearReg;
+    year = 2000 + bcdToDec(yearReg);
   }
 
   if (second > 59 || minute > 59 || hour > 23 || day < 1 || day > 31 ||
       month < 1 || month > 12) {
+
+    Serial.println("PCF8563 returned invalid date/time.");
 
     return false;
   }
@@ -198,6 +263,8 @@ bool readPCF8563(uint8_t &second, uint8_t &minute, uint8_t &hour, uint8_t &day,
 
 // =====================================================
 // PCF8563 WRITE
+//
+// Starts at register 0x00
 // =====================================================
 bool writePCF8563(uint8_t second, uint8_t minute, uint8_t hour, uint8_t day,
                   uint8_t weekday, uint8_t month, uint16_t year) {
@@ -208,26 +275,50 @@ bool writePCF8563(uint8_t second, uint8_t minute, uint8_t hour, uint8_t day,
 
   Wire.beginTransmission(PCF8563_ADDR);
 
-  Wire.write(0x02);
+  // Register address
+  Wire.write(0x00);
 
-  // Clear VL bit while writing seconds
+  // Control/Status 1
+  Wire.write(0x00);
+
+  // Control/Status 2
+  Wire.write(0x00);
+
+  // Seconds
   Wire.write(decToBcd(second) & 0x7F);
 
+  // Minutes
   Wire.write(decToBcd(minute) & 0x7F);
+
+  // Hours
   Wire.write(decToBcd(hour) & 0x3F);
+
+  // Day
   Wire.write(decToBcd(day) & 0x3F);
+
+  // Weekday
   Wire.write(weekday & 0x07);
 
-  // 2000-2099 => century bit = 0
+  // Month / century
   Wire.write(decToBcd(month) & 0x1F);
 
+  // Year
   Wire.write(decToBcd(year - 2000));
 
-  return Wire.endTransmission() == 0;
+  uint8_t err = Wire.endTransmission();
+
+  if (err != 0) {
+
+    Serial.printf("PCF8563 write error: %d\n", err);
+
+    return false;
+  }
+
+  return true;
 }
 
 // =====================================================
-// GET SYSTEM TIME
+// GET ESP32 SYSTEM TIME
 // =====================================================
 bool getSystemTime(uint8_t &second, uint8_t &minute, uint8_t &hour,
                    uint8_t &day, uint8_t &month, uint16_t &year,
@@ -257,27 +348,58 @@ bool getSystemTime(uint8_t &second, uint8_t &minute, uint8_t &hour,
 }
 
 // =====================================================
-// SYNC SYSTEM TIME -> PCF8563
+// SYNC NTP -> PCF8563
+//
+// Stage 1: Probe
+// Stage 2: Write
+// Stage 3: Read-back
 // =====================================================
 bool syncRTCFromNTP() {
 
   struct tm timeinfo;
 
-  // Wait for SNTP time to become available.
+  // Wait for valid NTP/system time
   if (!getLocalTime(&timeinfo, 1000)) {
+
     Serial.println("NTP time not ready yet.");
+
     return false;
   }
 
   uint16_t year = timeinfo.tm_year + 1900;
 
-  // Reject invalid/default RTC/system dates.
-  // This project is currently operating in the 2020s.
   if (year < 2025 || year > 2099) {
-    Serial.printf("Invalid NTP year received: %u\\n", year);
+
+    Serial.printf("Invalid NTP year: %u\n", year);
+
     return false;
   }
 
+  // System/NTP time is valid
+  ntpSyncDone = true;
+
+  // ---------------------------------------------------
+  // STAGE 1 - PROBE
+  // ---------------------------------------------------
+  if (!isPCF8563Present()) {
+
+    rtcAvailable = false;
+
+    Wire.beginTransmission(PCF8563_ADDR);
+    uint8_t err = Wire.endTransmission();
+
+    Serial.printf("PCF8563 probe failed (error %d)\n", err);
+
+    return false;
+  }
+
+  rtcAvailable = true;
+
+  Serial.println("PCF8563 probe: OK");
+
+  // ---------------------------------------------------
+  // STAGE 2 - WRITE
+  // ---------------------------------------------------
   uint8_t second = timeinfo.tm_sec;
   uint8_t minute = timeinfo.tm_min;
   uint8_t hour = timeinfo.tm_hour;
@@ -285,26 +407,79 @@ bool syncRTCFromNTP() {
   uint8_t month = timeinfo.tm_mon + 1;
   uint8_t weekday = timeinfo.tm_wday;
 
-  bool result = writePCF8563(second, minute, hour, day, weekday, month, year);
+  if (!writePCF8563(second, minute, hour, day, weekday, month, year)) {
 
-  if (result) {
+    Serial.println("PCF8563 write: FAILED");
 
-    Serial.println("--------------------------------");
-    Serial.println("PCF8563 SYNCED FROM NTP");
+    rtcSynced = false;
 
-    Serial.printf("Date: %02d/%02d/%04d\\n", day, month, year);
-
-    Serial.printf("Time: %02d:%02d:%02d\\n", hour, minute, second);
-
-    Serial.println("--------------------------------");
-
-    ntpSyncDone = true;
-    return true;
+    return false;
   }
 
-  Serial.println("PCF8563 write failed.");
-  return false;
+  Serial.println("PCF8563 write: OK");
+
+  delay(30);
+
+  // ---------------------------------------------------
+  // STAGE 3 - READ-BACK
+  // ---------------------------------------------------
+  uint8_t vSec;
+  uint8_t vMin;
+  uint8_t vHour;
+  uint8_t vDay;
+  uint8_t vMonth;
+
+  uint16_t vYear;
+
+  if (!readPCF8563(vSec, vMin, vHour, vDay, vMonth, vYear)) {
+
+    Serial.println("PCF8563 read-back: FAILED");
+
+    rtcSynced = false;
+
+    return false;
+  }
+
+  Serial.println("PCF8563 read-back: OK");
+
+  // Seconds can advance between write/read.
+  // Verify remaining fields.
+  if (vMin != minute || vHour != hour || vDay != day || vMonth != month ||
+      vYear != year) {
+
+    Serial.println("PCF8563 read-back MISMATCH");
+
+    Serial.printf("Written : %02d:%02d:%02d %02d/%02d/%04d\n", hour, minute,
+                  second, day, month, year);
+
+    Serial.printf("ReadBack: %02d:%02d:%02d %02d/%02d/%04d\n", vHour, vMin,
+                  vSec, vDay, vMonth, vYear);
+
+    rtcSynced = false;
+
+    return false;
+  }
+
+  // ---------------------------------------------------
+  // SUCCESS
+  // ---------------------------------------------------
+  rtcSynced = true;
+
+  Serial.println("--------------------------------");
+
+  Serial.println("PCF8563 SYNCED FROM NTP");
+
+  Serial.printf("Date: %02d/%02d/%04d\n", day, month, year);
+
+  Serial.printf("Time: %02d:%02d:%02d\n", hour, minute, second);
+
+  Serial.println("Verification: PASSED");
+
+  Serial.println("--------------------------------");
+
+  return true;
 }
+
 // =====================================================
 // SET ESP32 SYSTEM TIME FROM PCF8563
 // =====================================================
@@ -315,6 +490,7 @@ bool syncSystemTimeFromRTC() {
   uint8_t hour;
   uint8_t day;
   uint8_t month;
+
   uint16_t year;
 
   if (!readPCF8563(second, minute, hour, day, month, year)) {
@@ -356,58 +532,90 @@ bool syncSystemTimeFromRTC() {
 
 // =====================================================
 // RTC VALID
+//
+// IMPORTANT:
+// Do not permanently depend on rtcAvailable.
+// Probe the device every time.
 // =====================================================
 bool isRTCValid() {
+
+  if (!isPCF8563Present()) {
+
+    rtcAvailable = false;
+
+    return false;
+  }
 
   uint8_t second;
   uint8_t minute;
   uint8_t hour;
   uint8_t day;
   uint8_t month;
+
   uint16_t year;
 
-  if (!rtcAvailable) {
-    return false;
-  }
-
   if (!readPCF8563(second, minute, hour, day, month, year)) {
+
+    rtcAvailable = false;
 
     return false;
   }
 
   if (year < 2024 || year > 2099) {
+
+    rtcAvailable = false;
+
     return false;
   }
+
+  rtcAvailable = true;
 
   return true;
 }
 
 // =====================================================
 // TIME STRING
-// ESP32 system/NTP time is authoritative for dashboard time.
-// PCF8563 is used only as a fallback when system time is unavailable.
+//
+// NTP/system time is authoritative.
+// RTC is fallback.
 // =====================================================
 String getTimeString() {
+
   time_t now = time(nullptr);
 
   if (now >= 1700000000) {
+
     struct tm timeinfo;
+
     if (localtime_r(&now, &timeinfo)) {
+
       char buffer[12];
+
       snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", timeinfo.tm_hour,
                timeinfo.tm_min, timeinfo.tm_sec);
+
       return String(buffer);
     }
   }
 
-  uint8_t second, minute, hour, day, month;
+  // RTC fallback
+  uint8_t second;
+  uint8_t minute;
+  uint8_t hour;
+  uint8_t day;
+  uint8_t month;
+
   uint16_t year;
+
   if (!readPCF8563(second, minute, hour, day, month, year)) {
+
     return "00:00:00";
   }
 
   char buffer[12];
+
   snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", hour, minute, second);
+
   return String(buffer);
 }
 
@@ -415,26 +623,41 @@ String getTimeString() {
 // DATE STRING
 // =====================================================
 String getDateString() {
+
   time_t now = time(nullptr);
 
   if (now >= 1700000000) {
+
     struct tm timeinfo;
+
     if (localtime_r(&now, &timeinfo)) {
+
       char buffer[16];
+
       snprintf(buffer, sizeof(buffer), "%02d/%02d/%04d", timeinfo.tm_mday,
                timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);
+
       return String(buffer);
     }
   }
 
-  uint8_t second, minute, hour, day, month;
+  uint8_t second;
+  uint8_t minute;
+  uint8_t hour;
+  uint8_t day;
+  uint8_t month;
+
   uint16_t year;
+
   if (!readPCF8563(second, minute, hour, day, month, year)) {
+
     return "01/01/2000";
   }
 
   char buffer[16];
+
   snprintf(buffer, sizeof(buffer), "%02d/%02d/%04d", day, month, year);
+
   return String(buffer);
 }
 
@@ -452,7 +675,7 @@ void addCORS() {
 }
 
 // =====================================================
-// JSON
+// JSON RESPONSE
 // =====================================================
 void sendJSON(int code, String json) {
 
@@ -471,12 +694,14 @@ String getUIDString() {
   for (byte i = 0; i < rfid.uid.size; i++) {
 
     if (rfid.uid.uidByte[i] < 0x10) {
+
       uid += "0";
     }
 
     uid += String(rfid.uid.uidByte[i], HEX);
 
     if (i < rfid.uid.size - 1) {
+
       uid += ":";
     }
   }
@@ -488,6 +713,8 @@ String getUIDString() {
 
 // =====================================================
 // RFID UNLOCK
+//
+// ONLY physical RFID scanner calls this function.
 // =====================================================
 void unlockByRFID(String uid) {
 
@@ -504,14 +731,18 @@ void unlockByRFID(String uid) {
 
     Serial.println();
     Serial.println("================================");
+
     Serial.println("ADMIN RFID AUTHORIZED");
+
     Serial.println("TOUCH BELL UNLOCKED");
+
     Serial.println("================================");
 
   } else {
 
     Serial.println();
     Serial.println("Unauthorized RFID:");
+
     Serial.println(uid);
 
     rfidAuthenticated = false;
@@ -555,8 +786,11 @@ void startBell(bool emergency = false) {
   Serial.println("--------------------------------");
 
   if (emergency) {
+
     Serial.println("EMERGENCY BELL");
+
   } else {
+
     Serial.println("MANUAL / AUTOMATIC BELL");
   }
 
@@ -596,418 +830,667 @@ void updateBell() {
 }
 
 // =====================================================
-// TIMETABLE HELPERS
+// JSON ESCAPE
 // =====================================================
 String jsonEscape(const String &value) {
+
   String out = "";
+
   for (size_t i = 0; i < value.length(); i++) {
+
     char c = value[i];
+
     if (c == '\\')
       out += "\\\\";
+
     else if (c == '"')
       out += "\\\"";
+
     else if (c == '\n')
       out += "\\n";
+
     else if (c == '\r')
       out += "\\r";
+
     else
       out += c;
   }
+
   return out;
 }
 
+// =====================================================
+// FIELD STRING
+// =====================================================
 String fieldString(const String &body, const char *key,
                    const String &fallback = "") {
+
   String needle = String("\"") + key + "\"";
+
   int pos = body.indexOf(needle);
+
   if (pos < 0)
     return fallback;
+
   int colon = body.indexOf(':', pos + needle.length());
+
   if (colon < 0)
     return fallback;
+
   int q1 = body.indexOf('"', colon + 1);
+
   if (q1 < 0)
     return fallback;
+
   int q2 = q1 + 1;
+
   while (q2 < (int)body.length()) {
-    if (body[q2] == '"' && body[q2 - 1] != '\\')
+
+    if (body[q2] == '"' && body[q2 - 1] != '\\') {
+
       break;
+    }
+
     q2++;
   }
-  if (q2 >= (int)body.length())
+
+  if (q2 >= (int)body.length()) {
+
     return fallback;
+  }
+
   return body.substring(q1 + 1, q2);
 }
 
+// =====================================================
+// FIELD RAW
+// =====================================================
 String fieldRaw(const String &body, const char *key,
                 const String &fallback = "") {
+
   String needle = String("\"") + key + "\"";
+
   int pos = body.indexOf(needle);
+
   if (pos < 0)
     return fallback;
+
   int colon = body.indexOf(':', pos + needle.length());
+
   if (colon < 0)
     return fallback;
+
   int start = colon + 1;
+
   while (start < (int)body.length() &&
-         (body[start] == ' ' || body[start] == '\t'))
+         (body[start] == ' ' || body[start] == '\t')) {
+
     start++;
+  }
+
   int end = start;
-  while (end < (int)body.length() && body[end] != ',' && body[end] != '}')
+
+  while (end < (int)body.length() && body[end] != ',' && body[end] != '}') {
+
     end++;
+  }
+
   String value = body.substring(start, end);
+
   value.trim();
+
   return value;
 }
 
+// =====================================================
+// FIELD INT
+// =====================================================
 int fieldInt(const String &body, const char *key, int fallback = 0) {
+
   String v = fieldRaw(body, key, "");
+
   if (v.length() == 0)
     return fallback;
+
   return v.toInt();
 }
 
+// =====================================================
+// FIELD BOOL
+// =====================================================
 bool fieldBool(const String &body, const char *key, bool fallback = true) {
+
   String v = fieldRaw(body, key, "");
+
   v.toLowerCase();
-  if (v == "true" || v == "1")
+
+  if (v == "true" || v == "1") {
+
     return true;
-  if (v == "false" || v == "0")
+  }
+
+  if (v == "false" || v == "0") {
+
     return false;
+  }
+
   return fallback;
 }
 
+// =====================================================
+// VALIDATE HH:MM
+// =====================================================
 bool validTimeHHMM(const String &t) {
-  if (t.length() != 5 || t[2] != ':')
+
+  if (t.length() != 5 || t[2] != ':') {
+
     return false;
+  }
+
   int h = t.substring(0, 2).toInt();
+
   int m = t.substring(3, 5).toInt();
+
   return h >= 0 && h <= 23 && m >= 0 && m <= 59;
 }
 
+// =====================================================
+// LOAD TIMETABLE
+// =====================================================
 void loadTimetable() {
+
   timetableCount = timetablePrefs.getInt("count", 0);
+
   nextTimetableId = timetablePrefs.getInt("nextId", 1);
 
-  if (timetableCount < 0 || timetableCount > MAX_TIMETABLE_ENTRIES)
+  if (timetableCount < 0 || timetableCount > MAX_TIMETABLE_ENTRIES) {
+
     timetableCount = 0;
-  if (nextTimetableId < 1)
+  }
+
+  if (nextTimetableId < 1) {
     nextTimetableId = 1;
+  }
 
   for (int i = 0; i < timetableCount; i++) {
+
     String key = "e" + String(i);
+
     String raw = timetablePrefs.getString(key.c_str(), "");
+
     int p1 = raw.indexOf('|');
+
     int p2 = raw.indexOf('|', p1 + 1);
+
     int p3 = raw.indexOf('|', p2 + 1);
+
     int p4 = raw.indexOf('|', p3 + 1);
+
     int p5 = raw.indexOf('|', p4 + 1);
+
     int p6 = raw.indexOf('|', p5 + 1);
 
     if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0 || p5 < 0 || p6 < 0) {
+
       timetableCount = i;
       break;
     }
 
     timetable[i].id = raw.substring(0, p1).toInt();
+
     timetable[i].period = raw.substring(p1 + 1, p2).toInt();
+
     timetable[i].start = raw.substring(p2 + 1, p3);
+
     timetable[i].end = raw.substring(p3 + 1, p4);
+
     timetable[i].name = raw.substring(p4 + 1, p5);
+
     timetable[i].duration = raw.substring(p5 + 1, p6).toInt();
+
     timetable[i].enabled = raw.substring(p6 + 1).toInt() != 0;
   }
 
   Serial.printf("Timetable loaded: %d entries\n", timetableCount);
 }
 
+// =====================================================
+// SAVE TIMETABLE
+// =====================================================
 void saveTimetable() {
+
   timetablePrefs.putInt("count", timetableCount);
+
   timetablePrefs.putInt("nextId", nextTimetableId);
 
   for (int i = 0; i < timetableCount; i++) {
+
     String key = "e" + String(i);
+
     String raw = String(timetable[i].id) + "|" + String(timetable[i].period) +
                  "|" + timetable[i].start + "|" + timetable[i].end + "|" +
                  timetable[i].name + "|" + String(timetable[i].duration) + "|" +
                  (timetable[i].enabled ? "1" : "0");
+
     timetablePrefs.putString(key.c_str(), raw);
   }
 
-  // Remove stale records after delete.
+  // Remove stale entries
   for (int i = timetableCount; i < MAX_TIMETABLE_ENTRIES; i++) {
+
     String key = "e" + String(i);
+
     timetablePrefs.remove(key.c_str());
   }
 }
 
+// =====================================================
+// FIND TIMETABLE
+// =====================================================
 int findTimetableIndexById(int id) {
+
   for (int i = 0; i < timetableCount; i++) {
-    if (timetable[i].id == id)
+
+    if (timetable[i].id == id) {
+
       return i;
+    }
   }
+
   return -1;
 }
 
+// =====================================================
+// TIMETABLE JSON
+// =====================================================
 String timetableEntryJSON(const TimetableEntry &e) {
+
   String json = "{";
+
   json += "\"id\":" + String(e.id) + ",";
+
   json += "\"period\":" + String(e.period) + ",";
+
   json += "\"start\":\"" + jsonEscape(e.start) + "\",";
+
   json += "\"end\":\"" + jsonEscape(e.end) + "\",";
+
   json += "\"name\":\"" + jsonEscape(e.name) + "\",";
+
   json += "\"duration\":" + String(e.duration) + ",";
+
   json += "\"enabled\":" + String(e.enabled ? "true" : "false");
+
   json += "}";
+
   return json;
 }
 
+// =====================================================
+// SEND TIMETABLE JSON
+// =====================================================
 void sendTimetableJSON() {
-  // Simple insertion sort by period for stable dashboard ordering.
+
   int order[MAX_TIMETABLE_ENTRIES];
-  for (int i = 0; i < timetableCount; i++)
+
+  for (int i = 0; i < timetableCount; i++) {
+
     order[i] = i;
+  }
+
+  // Sort by period
   for (int i = 1; i < timetableCount; i++) {
+
     int x = order[i];
+
     int j = i - 1;
+
     while (j >= 0 && timetable[order[j]].period > timetable[x].period) {
+
       order[j + 1] = order[j];
+
       j--;
     }
+
     order[j + 1] = x;
   }
 
   String json = "[";
+
   for (int i = 0; i < timetableCount; i++) {
+
     if (i > 0)
       json += ",";
+
     json += timetableEntryJSON(timetable[order[i]]);
   }
+
   json += "]";
+
   sendJSON(200, json);
 }
 
 // =====================================================
-// API TIMETABLE
-// GET /api/timetable
+// GET TIMETABLE
 // =====================================================
 void handleTimetableGet() { sendTimetableJSON(); }
 
 // =====================================================
-// ADMIN AUTHORIZATION
-// Any configuration-changing endpoint must pass this check.
-// Reading status/timetable remains allowed without RFID.
+// ADMIN AUTH
 // =====================================================
 bool isAdminAuthenticated() { return rfidAuthenticated; }
 
 bool requireAdminAuth() {
-  if (isAdminAuthenticated())
-    return true;
 
-  sendJSON(403, "{\"success\":false,\"error\":\"RFID_AUTH_REQUIRED\","
+  if (isAdminAuthenticated()) {
+    return true;
+  }
+
+  sendJSON(403, "{\"success\":false,"
+                "\"error\":\"RFID_AUTH_REQUIRED\","
                 "\"message\":\"Valid admin RFID required for changes\"}");
+
   return false;
 }
 
 // =====================================================
-// API TIMETABLE ADD
-// POST /api/timetable
+// ADD TIMETABLE
 // =====================================================
 void handleTimetablePost() {
+
   if (!requireAdminAuth())
     return;
 
   if (!server.hasArg("plain")) {
-    sendJSON(400, "{\"success\":false,\"error\":\"Request body missing\"}");
+
+    sendJSON(400, "{\"success\":false,"
+                  "\"error\":\"Request body missing\"}");
+
     return;
   }
 
   if (timetableCount >= MAX_TIMETABLE_ENTRIES) {
-    sendJSON(409, "{\"success\":false,\"error\":\"Timetable full\"}");
+
+    sendJSON(409, "{\"success\":false,"
+                  "\"error\":\"Timetable full\"}");
+
     return;
   }
 
   String body = server.arg("plain");
+
   TimetableEntry e;
+
   e.id = nextTimetableId++;
+
   e.period = fieldInt(body, "period", e.id);
+
   e.start = fieldString(body, "start", "");
+
   e.end = fieldString(body, "end", "");
+
   e.name = fieldString(body, "name", "");
+
   e.duration = fieldInt(body, "duration", 3);
+
   e.enabled = fieldBool(body, "enabled", true);
 
   if (!validTimeHHMM(e.start) || !validTimeHHMM(e.end) ||
       e.name.length() == 0) {
-    sendJSON(400, "{\"success\":false,\"error\":\"Invalid timetable entry\"}");
+
+    sendJSON(400, "{\"success\":false,"
+                  "\"error\":\"Invalid timetable entry\"}");
+
     nextTimetableId--;
+
     return;
   }
 
   if (e.duration < 1)
     e.duration = 1;
+
   if (e.duration > 60)
     e.duration = 60;
 
   timetable[timetableCount++] = e;
+
   saveTimetable();
 
-  String response =
-      "{\"success\":true,\"entry\":" + timetableEntryJSON(e) + "}";
+  String response = "{\"success\":true,"
+                    "\"entry\":" +
+                    timetableEntryJSON(e) + "}";
+
   sendJSON(201, response);
 }
 
 // =====================================================
-// API TIMETABLE UPDATE / DELETE / TOGGLE
-// Dynamic paths are handled through onNotFound(), e.g.
-// /api/timetable/3 and /api/timetable/3/toggle
+// UPDATE / DELETE / TOGGLE
 // =====================================================
 void handleTimetableDynamic() {
+
   String uri = server.uri();
+
   const String prefix = "/api/timetable/";
+
   if (!uri.startsWith(prefix)) {
+
     sendJSON(404, "{\"error\":\"Endpoint not found\"}");
+
     return;
   }
 
   String rest = uri.substring(prefix.length());
+
   bool toggle = false;
+
   if (rest.endsWith("/toggle")) {
+
     toggle = true;
+
     rest = rest.substring(0, rest.length() - 7);
   }
 
   int id = rest.toInt();
+
   int idx = findTimetableIndexById(id);
+
   if (idx < 0) {
-    sendJSON(404, "{\"success\":false,\"error\":\"Entry not found\"}");
+
+    sendJSON(404, "{\"success\":false,"
+                  "\"error\":\"Entry not found\"}");
+
     return;
   }
 
-  // GET remains public; all write operations require valid admin RFID.
-  if (server.method() != HTTP_GET && !requireAdminAuth())
-    return;
+  // All write operations require RFID
+  if (server.method() != HTTP_GET && !requireAdminAuth()) {
 
+    return;
+  }
+
+  // TOGGLE
   if (toggle && server.method() == HTTP_PUT) {
+
     timetable[idx].enabled = !timetable[idx].enabled;
+
     saveTimetable();
-    String response = "{\"success\":true,\"enabled\":" +
+
+    String response = "{\"success\":true,"
+                      "\"enabled\":" +
                       String(timetable[idx].enabled ? "true" : "false") + "}";
+
     sendJSON(200, response);
+
     return;
   }
 
+  // DELETE
   if (server.method() == HTTP_DELETE) {
-    for (int i = idx; i < timetableCount - 1; i++)
+
+    for (int i = idx; i < timetableCount - 1; i++) {
+
       timetable[i] = timetable[i + 1];
+    }
+
     timetableCount--;
+
     saveTimetable();
+
     sendJSON(200, "{\"success\":true}");
+
     return;
   }
 
+  // UPDATE
   if (server.method() == HTTP_PUT) {
+
     if (!server.hasArg("plain")) {
-      sendJSON(400, "{\"success\":false,\"error\":\"Request body missing\"}");
+
+      sendJSON(400, "{\"success\":false,"
+                    "\"error\":\"Request body missing\"}");
+
       return;
     }
 
     String body = server.arg("plain");
+
     String start = fieldString(body, "start", timetable[idx].start);
+
     String end = fieldString(body, "end", timetable[idx].end);
+
     String name = fieldString(body, "name", timetable[idx].name);
+
     int period = fieldInt(body, "period", timetable[idx].period);
+
     int duration = fieldInt(body, "duration", timetable[idx].duration);
+
     bool enabled = fieldBool(body, "enabled", timetable[idx].enabled);
 
     if (!validTimeHHMM(start) || !validTimeHHMM(end) || name.length() == 0) {
-      sendJSON(400,
-               "{\"success\":false,\"error\":\"Invalid timetable entry\"}");
+
+      sendJSON(400, "{\"success\":false,"
+                    "\"error\":\"Invalid timetable entry\"}");
+
       return;
     }
 
     if (duration < 1)
       duration = 1;
+
     if (duration > 60)
       duration = 60;
 
     timetable[idx].period = period;
+
     timetable[idx].start = start;
+
     timetable[idx].end = end;
+
     timetable[idx].name = name;
+
     timetable[idx].duration = duration;
+
     timetable[idx].enabled = enabled;
+
     saveTimetable();
 
-    String response =
-        "{\"success\":true,\"entry\":" + timetableEntryJSON(timetable[idx]) +
-        "}";
+    String response = "{\"success\":true,"
+                      "\"entry\":" +
+                      timetableEntryJSON(timetable[idx]) + "}";
+
     sendJSON(200, response);
+
     return;
   }
 
-  sendJSON(405, "{\"success\":false,\"error\":\"Method not allowed\"}");
+  sendJSON(405, "{\"success\":false,"
+                "\"error\":\"Method not allowed\"}");
 }
 
 // =====================================================
 // AUTOMATIC BELL
-// Dashboard timetable is the only source of automatic times.
-// No timetable times are hard-coded in firmware.
 // =====================================================
 void checkAutomaticBell() {
-  if (bellActive || timetableCount == 0)
+
+  if (bellActive || timetableCount == 0) {
+
     return;
+  }
 
   time_t now = time(nullptr);
-  if (now < 1700000000)
+
+  if (now < 1700000000) {
     return;
+  }
 
   struct tm timeinfo;
-  if (!localtime_r(&now, &timeinfo))
+
+  if (!localtime_r(&now, &timeinfo)) {
+
     return;
+  }
 
   char hhmm[6];
+
   snprintf(hhmm, sizeof(hhmm), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
 
   char dateKey[16];
+
   snprintf(dateKey, sizeof(dateKey), "%04d-%02d-%02d", timeinfo.tm_year + 1900,
            timeinfo.tm_mon + 1, timeinfo.tm_mday);
 
-  // Only trigger near the start of the minute. This prevents a newly
-  // uploaded timetable from ringing late in an already-running minute.
-  if (timeinfo.tm_sec > 2)
+  // Only first 3 seconds of minute
+  if (timeinfo.tm_sec > 2) {
     return;
+  }
 
   for (int i = 0; i < timetableCount; i++) {
-    if (!timetable[i].enabled)
+
+    if (!timetable[i].enabled) {
+
       continue;
-    if (timetable[i].start != String(hhmm))
+    }
+
+    if (timetable[i].start != String(hhmm)) {
+
       continue;
+    }
 
     String key = String(dateKey) + ":" + String(timetable[i].id);
-    if (key == lastAutoBellKey)
+
+    if (key == lastAutoBellKey) {
+
       return;
+    }
 
     lastAutoBellKey = key;
+
     unsigned long seconds = (unsigned long)timetable[i].duration;
+
     if (seconds < 1)
       seconds = 1;
+
     if (seconds > 60)
       seconds = 60;
+
     bellDuration = seconds * 1000UL;
+
     startBell(false);
 
     Serial.print("AUTOMATIC TIMETABLE BELL -> ");
+
     Serial.print(timetable[i].name);
+
     Serial.print(" at ");
+
     Serial.println(timetable[i].start);
+
     return;
   }
 }
 
 // =====================================================
 // API STATUS
-// GET /api/status
 // =====================================================
 void handleStatus() {
 
@@ -1030,44 +1513,53 @@ void handleStatus() {
   json += "\"online\":true,";
 
   json += "\"wifi\":";
+
   json += WiFi.status() == WL_CONNECTED ? "true," : "false,";
 
   json += "\"ip\":\"";
+
   json += WiFi.localIP().toString();
+
   json += "\",";
 
   json += "\"bellActive\":";
+
   json += bellActive ? "true," : "false,";
 
   json += "\"bellIsEmergency\":";
+
   json += bellIsEmergency ? "true," : "false,";
 
-  json += "\"bellDuration\":";
-  json += String(bellDuration / 1000);
-  json += ",";
+  json += "\"bellDuration\":" + String(bellDuration / 1000) + ",";
 
-  json += "\"bellCountdown\":";
-  json += String(countdownSeconds);
-  json += ",";
+  json += "\"bellCountdown\":" + String(countdownSeconds) + ",";
 
   json += "\"rfidUnlocked\":";
+
   json += rfidAuthenticated ? "true," : "false,";
 
   json += "\"rtcSynced\":";
-  json += isRTCValid() ? "true," : "false,";
+
+  json += rtcSynced ? "true," : "false,";
 
   json += "\"time\":\"";
+
   json += getTimeString();
+
   json += "\",";
 
   json += "\"date\":\"";
+
   json += getDateString();
+
   json += "\",";
 
   json += "\"touch\":";
+
   json += digitalRead(TTP223_PIN) ? "true," : "false,";
 
   json += "\"emergencyButton\":";
+
   json += digitalRead(EMERGENCY_PIN) == LOW ? "true" : "false";
 
   json += "}";
@@ -1076,29 +1568,34 @@ void handleStatus() {
 }
 
 // =====================================================
-// API AUTH STATUS
-// GET /api/auth
+// AUTH STATUS
 // =====================================================
 void handleAuthStatus() {
 
   String json = "{";
 
   json += "\"rfidAuthenticated\":";
+
   json += rfidAuthenticated ? "true," : "false,";
 
   json += "\"touchEnabled\":";
+
   json += touchEnabled ? "true," : "false,";
 
   json += "\"touchLocked\":";
+
   json += touchLocked ? "true," : "false,";
 
   json += "\"manualBellLocked\":";
+
   json += manualBellLocked ? "true," : "false,";
 
   json += "\"emergencyReady\":true,";
 
   json += "\"lastRfidUid\":\"";
+
   json += lastRfidUid;
+
   json += "\"";
 
   json += "}";
@@ -1107,79 +1604,35 @@ void handleAuthStatus() {
 }
 
 // =====================================================
-// API RFID AUTH
-// POST /api/auth/rfid
-// {"uid":"17:F1:74:06"}
+// HTTP RFID AUTH
+//
+// SECURITY:
+// This endpoint DOES NOT unlock the system.
+//
+// Physical RC522 RFID scan is the ONLY way
+// to authenticate admin.
 // =====================================================
 void handleRFIDAuth() {
 
-  if (!server.hasArg("plain")) {
-
-    sendJSON(400, "{\"success\":false,\"message\":\"UID missing\"}");
-
-    return;
-  }
-
-  String body = server.arg("plain");
-
-  int pos = body.indexOf("\"uid\"");
-
-  if (pos < 0) {
-
-    sendJSON(400, "{\"success\":false,\"message\":\"UID missing\"}");
-
-    return;
-  }
-
-  int colon = body.indexOf(":", pos);
-
-  int firstQuote = body.indexOf("\"", colon + 1);
-
-  int secondQuote = body.indexOf("\"", firstQuote + 1);
-
-  if (firstQuote < 0 || secondQuote < 0) {
-
-    sendJSON(400, "{\"success\":false,\"message\":\"Invalid UID\"}");
-
-    return;
-  }
-
-  String uid = body.substring(firstQuote + 1, secondQuote);
-
-  uid.toUpperCase();
-
-  if (uid == ADMIN_UID) {
-
-    unlockByRFID(uid);
-
-    sendJSON(200, "{\"success\":true,\"authenticated\":true,\"message\":\"RFID "
-                  "authorized\"}");
-
-  } else {
-
-    lastRfidUid = uid;
-
-    lockAuthentication();
-
-    sendJSON(403, "{\"success\":false,\"authenticated\":false,\"message\":"
-                  "\"Unauthorized RFID\"}");
-  }
+  sendJSON(403, "{\"success\":false,"
+                "\"authenticated\":false,"
+                "\"error\":\"PHYSICAL_RFID_REQUIRED\","
+                "\"message\":\"Use the physical admin RFID card on RC522\"}");
 }
 
 // =====================================================
-// API LOCK
-// POST /api/auth/lock
+// LOCK
 // =====================================================
 void handleAuthLock() {
 
   lockAuthentication();
 
-  sendJSON(200, "{\"success\":true,\"locked\":true}");
+  sendJSON(200, "{\"success\":true,"
+                "\"locked\":true}");
 }
 
 // =====================================================
-// API MANUAL BELL
-// POST /api/bell/manual
+// MANUAL BELL
 // =====================================================
 void handleManualBell() {
 
@@ -1187,8 +1640,9 @@ void handleManualBell() {
 
   if (!rfidAuthenticated || !touchEnabled || touchLocked) {
 
-    sendJSON(403, "{\"success\":false,\"authorized\":false,\"message\":\"RFID "
-                  "authorization required\"}");
+    sendJSON(403, "{\"success\":false,"
+                  "\"authorized\":false,"
+                  "\"message\":\"RFID authorization required\"}");
 
     return;
   }
@@ -1198,20 +1652,25 @@ void handleManualBell() {
   // One-use authorization
   lockAuthentication();
 
-  sendJSON(200, "{\"success\":true,\"bellActive\":true,\"message\":\"Manual "
-                "bell started\"}");
+  sendJSON(200, "{\"success\":true,"
+                "\"bellActive\":true,"
+                "\"message\":\"Manual bell started\"}");
 }
 
 // =====================================================
-// API EMERGENCY
-// POST /api/bell/emergency
+// EMERGENCY BELL
+//
+// RFID NOT REQUIRED
 // =====================================================
 void handleEmergencyBell() {
 
   bellDuration = 3000;
+
   startBell(true);
 
-  sendJSON(200, "{\"success\":true,\"bellActive\":true,\"emergency\":true}");
+  sendJSON(200, "{\"success\":true,"
+                "\"bellActive\":true,"
+                "\"emergency\":true}");
 }
 
 // =====================================================
@@ -1224,7 +1683,7 @@ void handleEmergencyAlias() { handleEmergencyBell(); }
 void handleLockAlias() { handleAuthLock(); }
 
 // =====================================================
-// CORS OPTIONS
+// OPTIONS
 // =====================================================
 void handleOptions() {
 
@@ -1237,12 +1696,18 @@ void handleOptions() {
 // 404
 // =====================================================
 void handleNotFound() {
+
   if (server.uri().startsWith("/api/timetable/")) {
+
     if (server.method() == HTTP_OPTIONS) {
+
       handleOptions();
+
       return;
     }
+
     handleTimetableDynamic();
+
     return;
   }
 
@@ -1251,14 +1716,18 @@ void handleNotFound() {
 
 // =====================================================
 // RFID CHECK
+//
+// ONLY PHYSICAL RFID AUTHENTICATION
 // =====================================================
 void checkRFID() {
 
   if (!rfid.PICC_IsNewCardPresent()) {
+
     return;
   }
 
   if (!rfid.PICC_ReadCardSerial()) {
+
     return;
   }
 
@@ -1271,6 +1740,7 @@ void checkRFID() {
   unlockByRFID(uid);
 
   rfid.PICC_HaltA();
+
   rfid.PCD_StopCrypto1();
 }
 
@@ -1290,6 +1760,7 @@ void checkTouch() {
       Serial.println("Touch authorized -> Bell");
 
       bellDuration = 3000;
+
       startBell(false);
 
       // One touch = one bell
@@ -1316,6 +1787,7 @@ void checkEmergency() {
     Serial.println("!!! EMERGENCY BUTTON !!!");
 
     bellDuration = 3000;
+
     startBell(true);
   }
 
@@ -1328,6 +1800,7 @@ void checkEmergency() {
 void checkWiFi() {
 
   if (millis() - lastWiFiCheck < 10000) {
+
     return;
   }
 
@@ -1348,30 +1821,27 @@ void checkWiFi() {
 // =====================================================
 void updateClock() {
 
-  // ---------------------------------------------------
-  // Wi-Fi connected: NTP has priority.
-  // Do NOT load the old RTC value while waiting for NTP,
-  // because an invalid RTC value such as 2038 can overwrite
-  // the ESP32 system clock.
-  // ---------------------------------------------------
-  if (WiFi.status() == WL_CONNECTED && !ntpSyncDone) {
+  // ===================================================
+  // WIFI AVAILABLE
+  // NTP HAS PRIORITY
+  // ===================================================
+  if (WiFi.status() == WL_CONNECTED && (!ntpSyncDone || !rtcSynced)) {
 
     if (millis() - lastNTPSync >= 2000) {
 
       lastNTPSync = millis();
 
-      if (syncRTCFromNTP()) {
-        ntpSyncDone = true;
-      }
+      syncRTCFromNTP();
     }
 
     return;
   }
 
-  // ---------------------------------------------------
-  // Wi-Fi is unavailable: use a valid PCF8563 clock.
-  // ---------------------------------------------------
-  if (WiFi.status() != WL_CONNECTED && rtcAvailable) {
+  // ===================================================
+  // WIFI UNAVAILABLE
+  // RTC FALLBACK
+  // ===================================================
+  if (WiFi.status() != WL_CONNECTED) {
 
     static unsigned long lastRTCLoad = 0;
 
@@ -1380,11 +1850,15 @@ void updateClock() {
       lastRTCLoad = millis();
 
       if (isRTCValid()) {
+
         syncSystemTimeFromRTC();
+
+        rtcSynced = true;
       }
     }
   }
 }
+
 // =====================================================
 // SETUP
 // =====================================================
@@ -1395,13 +1869,17 @@ void setup() {
   delay(1000);
 
   Serial.println();
+
   Serial.println("======================================");
+
   Serial.println(" ADVANCED SMART SCHOOL BELL ESP32");
+
   Serial.println("======================================");
 
   // ===================================================
   // GPIO
   // ===================================================
+
   pinMode(TTP223_PIN, INPUT);
 
   pinMode(EMERGENCY_PIN, INPUT_PULLUP);
@@ -1421,39 +1899,82 @@ void setup() {
   // ===================================================
   // I2C
   // ===================================================
+
   Wire.begin(I2C_SDA, I2C_SCL);
 
   Wire.setClock(100000);
 
+  Serial.println("I2C started");
+
+  // ===================================================
+  // TIMEZONE CONFIG
+  //
+  // Configure timezone BEFORE WiFi/NTP.
+  // This makes RTC fallback consistent with IST.
+  // ===================================================
+
+  configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, "pool.ntp.org",
+             "time.nist.gov");
+
   // ===================================================
   // TIMETABLE STORAGE
   // ===================================================
-  timetablePrefs.begin("timetable", false);
-  loadTimetable();
 
-  Serial.println("I2C started");
+  timetablePrefs.begin("timetable", false);
+
+  loadTimetable();
 
   // ===================================================
   // PCF8563 DETECTION
   // ===================================================
-  Wire.beginTransmission(PCF8563_ADDR);
 
-  if (Wire.endTransmission() == 0) {
+  Serial.println("--------------------------------");
 
-    rtcAvailable = true;
+  Serial.println("I2C / RTC DIAGNOSTIC");
 
-    Serial.println("PCF8563 RTC detected at 0x51");
+  Serial.printf("  SDA:     GPIO %d\n", I2C_SDA);
+
+  Serial.printf("  SCL:     GPIO %d\n", I2C_SCL);
+
+  Serial.printf("  Target:  PCF8563 at 0x%02X\n", PCF8563_ADDR);
+
+  rtcAvailable = false;
+
+  for (int attempt = 1; attempt <= 3; attempt++) {
+
+    if (isPCF8563Present()) {
+
+      rtcAvailable = true;
+
+      Serial.printf("  I2C ACK: YES (attempt %d)\n", attempt);
+
+      break;
+    }
+
+    Wire.beginTransmission(PCF8563_ADDR);
+
+    uint8_t err = Wire.endTransmission();
+
+    Serial.printf("  I2C probe attempt %d failed (error %d)\n", attempt, err);
+
+    delay(100);
+  }
+
+  if (rtcAvailable) {
+
+    Serial.println("  Status:  PCF8563 DETECTED");
 
   } else {
 
-    rtcAvailable = false;
-
-    Serial.println("ERROR: PCF8563 RTC NOT FOUND");
+    Serial.println("  Status:  PCF8563 NOT FOUND");
   }
+
+  Serial.println("--------------------------------");
 
   // ===================================================
   // RFID
   // ===================================================
+
   SPI.begin(RFID_SCK, RFID_MISO, RFID_MOSI, RFID_SS);
 
   rfid.PCD_Init();
@@ -1465,6 +1986,7 @@ void setup() {
   // ===================================================
   // WIFI
   // ===================================================
+
   WiFi.mode(WIFI_STA);
 
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -1492,24 +2014,25 @@ void setup() {
 
     Serial.println(WiFi.localIP());
 
-    // =================================================
-    // NTP
-    // =================================================
-    configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, "pool.ntp.org",
-               "time.nist.gov");
-
     Serial.println("NTP started");
 
   } else {
 
     Serial.println("WiFi connection FAILED");
 
-    // Try existing RTC
+    // Try RTC immediately
     if (isRTCValid()) {
 
-      syncSystemTimeFromRTC();
+      if (syncSystemTimeFromRTC()) {
 
-      Serial.println("Using PCF8563 offline time.");
+        rtcSynced = true;
+
+        Serial.println("Using PCF8563 offline time.");
+      }
+
+    } else {
+
+      Serial.println("PCF8563 offline time unavailable.");
     }
   }
 
@@ -1523,7 +2046,8 @@ void setup() {
   // AUTH STATUS
   server.on("/api/auth", HTTP_GET, handleAuthStatus);
 
-  // RFID AUTH
+  // RFID HTTP endpoint
+  // Does NOT authenticate.
   server.on("/api/auth/rfid", HTTP_POST, handleRFIDAuth);
 
   // LOCK
@@ -1543,7 +2067,10 @@ void setup() {
   // TIMETABLE OPTIONS
   server.on("/api/timetable", HTTP_OPTIONS, handleOptions);
 
-  // OLD ALIASES
+  // ===================================================
+  // OLD API ALIASES
+  // ===================================================
+
   server.on("/api/bell", HTTP_POST, handleBellAlias);
 
   server.on("/api/emergency", HTTP_POST, handleEmergencyAlias);
@@ -1569,13 +2096,22 @@ void setup() {
   server.onNotFound(handleNotFound);
 
   // ===================================================
-  // START SERVER
+  // START HTTP SERVER
   // ===================================================
+
   server.begin();
 
   Serial.println("HTTP server started");
 
   Serial.println();
+
+  Serial.println("SYSTEM READY");
+
+  Serial.println("Physical RFID required for admin access.");
+
+  Serial.println("Emergency button always available.");
+
+  Serial.println("======================================");
 }
 
 // =====================================================
@@ -1592,14 +2128,16 @@ void loop() {
   // Clock
   updateClock();
 
-  // Hardware
+  // RFID
   checkRFID();
 
+  // Touch
   checkTouch();
 
+  // Emergency
   checkEmergency();
 
-  // Dashboard-driven automatic timetable bell
+  // Automatic timetable bell
   checkAutomaticBell();
 
   // Bell timer
