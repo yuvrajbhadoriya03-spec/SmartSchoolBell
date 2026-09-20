@@ -34,14 +34,19 @@ const API = (() => {
     );
 
     try {
+      const headers = {};
+      if (options.body) {
+        headers['Content-Type'] = 'application/json';
+      }
+      if (options.headers) {
+        Object.assign(headers, options.headers);
+      }
+
       const response = await fetch(url, {
         cache: 'no-store',
         ...options,
         signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(options.headers || {})
-        }
+        headers
       });
 
       const text = await response.text();
@@ -78,6 +83,7 @@ const API = (() => {
     if (error && error.data && typeof error.data === 'object') {
       return {
         success: false,
+        status: error.status || 500,
         error: error.data.error || `HTTP_${error.status || 500}`,
         message: error.data.message || error.message || 'ESP32 request rejected',
         ...error.data
@@ -85,8 +91,9 @@ const API = (() => {
     }
     return {
       success: false,
+      status: error?.status || 0,
       error: 'ESP32_OFFLINE',
-      message: 'ESP32 is not reachable'
+      message: error?.message || 'ESP32 is not reachable'
     };
   }
 

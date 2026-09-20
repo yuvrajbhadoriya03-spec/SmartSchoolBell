@@ -1263,31 +1263,15 @@ const App = (() => {
 
   // ═══════════ SAVE ENTRY ═══════════
   async function saveEntry(event) {
-
     event.preventDefault();
 
     const data = {
-      period:
-        parseInt(
-          $('#formPeriod').value
-        ),
-
-      start:
-        $('#formStart').value,
-
-      end:
-        $('#formEnd').value,
-
-      name:
-        $('#formName').value,
-
-      duration:
-        parseInt(
-          $('#formDuration').value
-        ),
-
-      enabled:
-        $('#formEnabled').checked,
+      period: parseInt($('#formPeriod').value, 10) || 1,
+      start: $('#formStart').value,
+      end: $('#formEnd').value,
+      name: $('#formName').value.trim(),
+      duration: parseInt($('#formDuration').value, 10) || 3,
+      enabled: $('#formEnabled').checked,
     };
 
     try {
@@ -1302,19 +1286,24 @@ const App = (() => {
       }
 
       if (res && res.success === false) {
-        alert(res.message || 'Save failed. Valid admin RFID authentication required.');
+        if (res.status === 403 || res.error === 'RFID_AUTH_REQUIRED') {
+          alert(`[RFID_AUTH_REQUIRED] HTTP 403 Forbidden: ${res.message || 'Valid admin RFID required for changes'}`);
+        } else {
+          alert(`Save failed: ${res.message || res.error || 'Valid admin RFID authentication required.'}`);
+        }
         return;
       }
 
       closeModal();
-      loadManagerTable();
-      loadTimetable();
+      await loadManagerTable();
+      await loadTimetable();
 
     } catch (e) {
       console.error(
         'Save failed:',
         e
       );
+      alert('Save failed: Unable to connect to ESP32.');
     }
   }
 
@@ -1331,18 +1320,23 @@ const App = (() => {
     try {
       const res = await API.deleteEntry(id);
       if (res && res.success === false) {
-        alert(res.message || 'Delete failed. Valid admin RFID authentication required.');
+        if (res.status === 403 || res.error === 'RFID_AUTH_REQUIRED') {
+          alert(`[RFID_AUTH_REQUIRED] HTTP 403 Forbidden: ${res.message || 'Valid admin RFID required for changes'}`);
+        } else {
+          alert(`Delete failed: ${res.message || res.error || 'Valid admin RFID authentication required.'}`);
+        }
         return;
       }
 
-      loadManagerTable();
-      loadTimetable();
+      await loadManagerTable();
+      await loadTimetable();
 
     } catch (e) {
       console.error(
         'Delete failed:',
         e
       );
+      alert('Delete failed: Unable to connect to ESP32.');
     }
   }
 
@@ -1351,18 +1345,25 @@ const App = (() => {
     try {
       const res = await API.toggleEntry(id);
       if (res && res.success === false) {
-        alert(res.message || 'Toggle failed. Valid admin RFID authentication required.');
-        loadManagerTable();
+        if (res.status === 403 || res.error === 'RFID_AUTH_REQUIRED') {
+          alert(`[RFID_AUTH_REQUIRED] HTTP 403 Forbidden: ${res.message || 'Valid admin RFID required for changes'}`);
+        } else {
+          alert(`Toggle failed: ${res.message || res.error || 'Valid admin RFID authentication required.'}`);
+        }
+        await loadManagerTable();
         return;
       }
 
-      loadTimetable();
+      await loadManagerTable();
+      await loadTimetable();
 
     } catch (e) {
       console.error(
         'Toggle failed:',
         e
       );
+      alert('Toggle failed: Unable to connect to ESP32.');
+      await loadManagerTable();
     }
   }
 
